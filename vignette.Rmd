@@ -1,0 +1,276 @@
+---
+title: "Vignette Learning"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidyquant)
+```
+
+## Background
+Main goal is to get better at understanding financial metrics for our business.
+
+I have a decent grasp of R now, and I'm doing a good job of losing money on stocks.  I can combine these two current parts of my life to learn business metrics for the future.
+
+The short-term goal of this is to go through the tidyquant vignettes and familiarize myself with the functions.  For functions that are especially relevant, I might stop and branch off and work on these in another Rmd file.
+
+## Vignette 1: Core Functions in tidyquant
+
+### Getting Data
+#### Symbol Data
+Can get stock indexes
+```{r}
+tq_index_options()
+```
+
+And exchanges
+```{r}
+tq_exchange_options()
+```
+
+And can pull stock lists from these
+```{r}
+tq_exchange("NASDAQ")
+```
+
+#### Getting Quantitative Data
+`tq_get()` is used to collect data.  It has a `get` argument that determines what type of data is returned.  To see all that you can collect, use `tq_get_options()`
+```{r}
+tq_get_options()
+```
+I'm probably going to be most interested in the financials
+
+I'll use ALV as a starting point since that's what got me into this mess.
+```{r}
+alv_prices <- tq_get("ALV", get = "stock.prices", from = "1900-01-01")
+alv_prices
+```
+
+That was for stock prices.  Looks like I could make candlestick plots.  Now let's see what dividends gives me.
+```{r}
+alv_divs <- tq_get("ALV", get = "dividends", from = "1900-01-01")
+alv_divs
+```
+Looks like I need to include the from period explicitly if I want everything, otherwise it does like 10 years back or so?
+I'm not sure if dividends is the yield % or a dollar amount?  Looks like it is a dollar amount when you go to Yahoo Finance, it matches the forward dividend number divided by 4.
+
+Can even check out the splits.  I forgot that those exist.
+```{r}
+alv_splits <- tq_get("ALV", get = "splits", from = "1900-01-01")
+alv_splits
+```
+I honestly don't know what this means.  I want to know it, but it's not important for my goal so I'll move on.  This is hard for me.
+
+Here's the one I care about.  Kind of worried it doesn't work anymore...
+```{r}
+alv_financials <- tq_get("ALV", get = "financials")
+```
+Dang.
+
+[Found an answer on stack exchange where someone made a function that replicates this, maybe?](https://stackoverflow.com/questions/49452906/getfinancials-quantmod-and-tq-get-tidy-quant-not-working/49466286#49466286)
+```{r}
+scrapy_stocks <- function(stock){
+    if ("rvest" %in% installed.packages()) {
+            library(rvest)
+    }else{
+            install.packages("rvest")
+            library(rvest)
+    }
+    for (i in 1:length(stock)) {
+            tryCatch(
+                    {
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[i],"/financials?p=",stock[i])
+                            wahis.session <- html_session(url)                                
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            IS <- p[[1]]
+                            colnames(IS) <- paste(IS[1,])
+                            IS <- IS[-c(1,5,12,20,25),]
+                            names_row <- paste(IS[,1])
+                            IS <- IS[,-1]
+                            IS <- apply(IS,2,function(x){gsub(",","",x)})
+                            IS <- as.data.frame(apply(IS,2,as.numeric))
+                            rownames(IS) <- paste(names_row)
+                            temp1 <- IS
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[i],"/balance-sheet?p=",stock[i])
+                            wahis.session <- html_session(url)
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            BS <- p[[1]]
+                            colnames(BS) <- BS[1,]
+                            BS <- BS[-c(1,2,17,28),]
+                            names_row <- BS[,1]
+                            BS <- BS[,-1] 
+                            BS <- apply(BS,2,function(x){gsub(",","",x)})
+                            BS <- as.data.frame(apply(BS,2,as.numeric))
+                            rownames(BS) <- paste(names_row)
+                            temp2 <- BS
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[i],"/cash-flow?p=",stock[i])
+                            wahis.session <- html_session(url)
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            CF <- p[[1]]
+                            colnames(CF) <- CF[1,]
+                            CF <- CF[-c(1,3,11,16),]
+                            names_row <- CF[,1]
+                            CF <- CF[,-1] 
+                            CF <- apply(CF,2,function(x){gsub(",","",x)})
+                            CF <- as.data.frame(apply(CF,2,as.numeric))
+                            rownames(CF) <- paste(names_row)
+                            temp3 <- CF
+                            assign(paste0(stock[i],'.f'),value = list(IS = temp1,BS = temp2,CF = temp3),envir = parent.frame())
+
+                    },
+                    error = function(cond){
+                            message(stock[i], "Give error ",cond)
+                    }
+            )
+    }
+}
+```
+
+```{r}
+alv_financials <- scrapy_stocks("ALV")
+alv_financials
+```
+Nope, going to have to troubleshoot this... Nevermind, it works. It's just that it doesn't return anything and instead creates an object in the global environment.  I'm not used to that.
+
+```{r}
+stock <- "ALV"
+
+if ("rvest" %in% installed.packages()) {
+  library(rvest)
+} else {
+  install.packages("rvest")
+  library(rvest)
+}
+
+# scrape data
+test <- "https://finance.yahoo.com/quote/" %>%
+  str_c(stock, "/financials?p=", stock) %>%
+  html_session() %>%
+  html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table') %>%
+  html_table(fill = TRUE) %>%
+  .[[1]]
+
+
+# set up subheaders
+colnames(test) <- paste(test[1,])
+
+test %<>%
+  rename(subcategory = 1) %>%
+  mutate(category = if_else(.[[1]] == .[[2]] | str_detect(.[[2]], "/"), subcategory, NA_character_)) %>%
+  fill(category) %>%
+  filter(category != subcategory) %>%
+  rowid_to_column("group")
+
+# clean values
+test %<>%
+  mutate_at(3:6, str_replace, "^-$", "0") %>%
+  mutate_at(3:6, parse_number)
+
+# wrangle columns into tidy
+test %>%
+  gather(key = "date", value = "value", 3:6)
+
+stock %>%
+  scrape_yahoo("IS") %>%
+  wrangle_fin() %>%
+  clean_fin() %>%
+  tidy_fin()
+  
+
+        tryCatch(
+                    {
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[1],"/financials?p=",stock[1])
+                            wahis.session <- html_session(url)                                    # this pulls out a table from yahoo
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            # takes out the table from a list
+                            IS <- p[[1]]
+                            # uses the first row as column names
+                            colnames(IS) <- paste(IS[1,])
+                            # removes subheaders that are in rows, this information is lost, you could probably keep it in a separate column as values for the different rows if you wanted to be tidy
+                            IS <- IS[-c(1,5,12,20,25),]
+                            # making the first column values into row names object and removing the column
+                            names_row <- paste(IS[,1])
+                            IS <- IS[,-1]
+                            # removes the commas in the values so they can be turned into numbers
+                            IS <- apply(IS,2,function(x){gsub(",","",x)})
+                            IS <- as.data.frame(apply(IS,2,as.numeric))
+                            # making the table have the row names
+                            rownames(IS) <- paste(names_row)
+                            # assigning it for later?
+                            temp1 <- IS
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[1],"/balance-sheet?p=",stock[1])
+                            wahis.session <- html_session(url)
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            BS <- p[[1]]
+                            colnames(BS) <- BS[1,]
+                            BS <- BS[-c(1,2,17,28),]
+                            names_row <- BS[,1]
+                            BS <- BS[,-1] 
+                            BS <- apply(BS,2,function(x){gsub(",","",x)})
+                            BS <- as.data.frame(apply(BS,2,as.numeric))
+                            rownames(BS) <- paste(names_row)
+                            temp2 <- BS
+                            url <- "https://finance.yahoo.com/quote/"
+                            url <- paste0(url,stock[i],"/cash-flow?p=",stock[i])
+                            wahis.session <- html_session(url)
+                            p <-    wahis.session %>%
+                                    html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+                                    html_table(fill = TRUE)
+                            CF <- p[[1]]
+                            colnames(CF) <- CF[1,]
+                            CF <- CF[-c(1,3,11,16),]
+                            names_row <- CF[,1]
+                            CF <- CF[,-1] 
+                            CF <- apply(CF,2,function(x){gsub(",","",x)})
+                            CF <- as.data.frame(apply(CF,2,as.numeric))
+                            rownames(CF) <- paste(names_row)
+                            temp3 <- CF
+                            # weird, it assigns it to a variable already, I guess that works.
+                            assign(paste0(stock[i],'.f'),value = list(IS = temp1,BS = temp2,CF = temp3),envir = parent.frame())
+
+                    },
+                    error = function(cond){
+                            message(stock[i], "Give error ",cond)
+                    }
+            )
+```
+
+I think the original tidyquant function changed to a dataframe from a timeseries object from quantmod that scraped a webpage and had 1 row per measurement, and each column was a date.  In this case I think the index in the time series was the measurement and this gets converted to the category column to make it all tidy.
+
+I think the function above is similar to quantmod's, but it's not in a time series format.  I can probably make this workish.
+
+```{r}
+stock %>%
+  scrape_yahoo(sheet = "CF") %>%
+  wrangle_fin() %>%
+  clean_fin() %>%
+  tidy_fin()
+```
+Nice, it works for all!
+
+```{r}
+get_fin("ALV", "BS")
+```
+
+```{r}
+get_fin(stock, "BS")
+
+test <- map(c("IS", "BS", "CF"), ~get_fin(stock = "ALV", sheet = .x))
+```
+
