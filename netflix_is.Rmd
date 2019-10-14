@@ -159,6 +159,10 @@ nflx_is %>%
 ```
 Looks like netflix might be putting a lot more effort into making their own shows.
 
+
+## Scraping Below
+Took too long to try and get working for the effort. Here's the original idea:
+
 I like the stacked line chart, but it's not really purty. Some of the other forms of income besides sales should be stacked on it, instead of being negative.  I'll make two datasets to deal with this, one for expenses, one for income.
 
 - Income
@@ -218,7 +222,31 @@ ggplot() +
   geom_area(data = nflx_exp, aes(x = year, y = value, fill = category))
 
 # make custom palette
-nflx_income %>%
-  bind_rows(income = nflx_income, expense = nflx_exp, .id = "type")
+# pull out income types in order
+income_types <- nflx_income %>%
+  group_by(category) %>%
+  summarize(mean_value = mean(value)) %>%
+#  mutate(category = fct_reorder(category, mean_value)) %>%
+  arrange(mean_value) %>%
+  pull(category)
+
+expense_types <- nflx_exp %>%
+  group_by(category) %>%
+  summarize(mean_value = abs(mean(value))) %>%
+#  mutate(category = fct_reorder(category, mean_value)) %>%
+  arrange(mean_value) %>%
+  pull(category)
+
+rev_palette <- c(brewer.pal(n = length(income_types), name = "Greens"), brewer.pal(n = length(expense_types), name = "Reds"))
+
+# not working because the column names are the same in each dataframe. I either need to change these, or scrap this.
+nflx_area_df <- bind_rows(list("income" = nflx_income, "expense" = nflx_exp), .id = "type") %>%
+  mutate(fct_category = factor(category, levels = c(income_types, expense_types)))
+
+nflx_area_df$fct_cat <- factor()
+
+nflx_area_df %>%
+  ggplot(aes(x = year, y = value, fill = category)) +
+  geom_area()
 ```
 
