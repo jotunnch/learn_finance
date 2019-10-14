@@ -1,0 +1,259 @@
+---
+title: "Autoliv: Income Statement"
+author: "jotunnch"
+date: "July 7, 2019"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+source("functions.R")
+library(janitor)
+library(lubridate)
+library(networkD3)
+library(htmlwidgets)
+library(htmltools)
+library(ggalluvial)
+```
+
+Going to practice learning an income statement for Autoliv
+
+First getting a tidy dataframe from yahoo
+```{r}
+alv_is <- get_fin("ALV", "IS")
+alv_is
+```
+
+This is all in long format.  I'll probably want it in wide format to do any operations on it.  I'll have the dates be records
+```{r}
+alv_play <- alv_is %>%
+  unite("category", subheader, category) %>%
+  select(-group) %>%
+  spread(key = category, value = value) %>%
+  clean_names() %>%
+  mutate(date = mdy(date))
+
+alv_play
+```
+## Revenue
+
+Check out total revenue
+```{r}
+alv_rev <- alv_play %>%
+  select(date, ends_with("revenue")) %>%
+  rename(sales = revenue_total_revenue,
+         cost_of_goods_sold = revenue_cost_of_revenue) %>%
+  mutate(gross_profits = sales - cost_of_goods_sold) %>%
+  select(date, sales, cost_of_goods_sold, gross_profits)
+
+alv_rev
+
+alv_rev %>%
+  gather(key = "category", value = "amount", -date) %>%
+  ggplot(aes(x = date, y = amount, col = category)) +
+  geom_line() +
+  ylim(0, NA)
+```
+
+This is confusing.  I would expect Autoliv to make more money when they sell more, but I guess not.  Is this because they discount on volume or something?  Some sort of different pricing?
+
+I'll try doing this from the bottom up.
+```{r}
+
+```
+
+Trying to make a sankey diagram
+```{r}
+long_alv_rev <- alv_rev %>%
+  gather(key = "name", value = "value", -date)
+
+alv_rev_nodes <- tibble(name = names(alv_rev)[-1],
+                         nodes = 0:2)
+
+alv_rev_links <- tibble(name = names(alv_rev)[c(-1, -2)],
+                        source = 0,
+                        target = c(1, 2)) %>%
+  right_join(long_alv_rev, by = "name") %>%
+  filter(!is.na(source)) %>%
+  select(-name)
+
+sankeyNetwork(alv_rev_links, alv_rev_nodes, "source", "target",
+              "value", "name", LinkGroup = "date")# %>%
+#  htmlwidgets::prependContent(htmltools::tags$h1("Gross Profits from Revenue"))
+```
+
+gonna try this with the tidyverse to do it for each individual quarter, i don't like how this looks and messing with the color seems like a pain
+```{r}
+nest_alv_rev_links <- alv_rev_links %>%
+  nest(-date)
+
+rev_gp_sankey <- function(links, nodes) {
+  sankeyNetwork(links, nodes, "source", "target",
+              "value", "name")
+}
+
+all_rev_years <- map(nest_alv_rev_links$data, rev_gp_sankey, alv_rev_nodes)
+
+all_rev_years
+
+```
+
+these still look gross, and I guess the ability to change them isn't easy to automate in R.
+I'm gonig to go back to the alluvial plots and see how they look.
+```{r}
+alv_rev_alluvial <- alv_rev %>%
+  mutate(sales = "Sales") %>%
+  gather(key = "revenue", value = "value", cost_of_goods_sold, gross_profits)
+
+alv_rev_alluvial
+
+alv_rev_alluvial %>%
+  ggplot(aes(y = value, axis2 = sales, axis1 = revenue)) +
+  geom_alluvium(aes(fill = as.factor(date))) +
+  geom_stratum() +
+  geom_label(stat = "stratum", label.strata = TRUE) +
+  labs(title = "Income Statement of ALV", ylab = "Dollars") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank()) +
+  coord_flip()
+
+alv_rev_alluvial %>%
+  ggplot(aes(y = value, axis2 = sales, axis1 = revenue)) +
+  geom_alluvium(aes(fill = revenue)) +
+  geom_stratum() +
+  geom_label(stat = "stratum", label.strata = TRUE) +
+  labs(title = "Income Statement of ALV", ylab = "Dollars") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  facet_wrap(~date, ncol = 1) +
+  coord_flip()
+```
+
+Pull out operating expenses
+```{r}
+alv_play %>%
+  select(starts_with("operating_expenses"))
+```
+Ok, weird, this doesn't add up.  I looked at other stocks on this site and they all add up, so I'm not sure what's going on, maybe it happens to certain stocks sometimes. I checked the Nasdaq website and that has numbers that add up correctly.  I'm going to see if I can scrape that one.
+
+```{r}
+alv_nasdaq_html <- read_html("https://www.nasdaq.com/symbol/alv/financials?query=income-statement")
+
+fin_tbl <- alv_nasdaq_html %>%
+  html_nodes("table") %>%
+  .[[3]] %>%
+  html_table(fill = TRUE)
+
+# wanted to make this automated, but can't figure out the tidyeval stuff for it, will just rename manually
+col_dates <- names(fin_tbl)[3:6]
+
+alv_nasdaq_is <- fin_tbl %>%
+  na_if("") %>%
+  remove_empty(c("rows", "cols")) %>%
+  clean_names() %>%
+  rename(category = period_ending) %>%
+  slice(-4) %>%
+  nest(-category) %>%
+  mutate(data = map(data, function(df) {
+    df %>%
+      remove_empty("cols") %>%
+      rename(`20181231` = 1,
+             `20171231` = 2,
+             `20161231` = 3,
+             `20151231` = 4) %>%
+      mutate_if(is.character, str_replace, "\\(\\$", "-") %>%
+      mutate_if(is.character, str_replace, "\\)", "") %>%
+      mutate_if(is.character, parse_number)
+  })) %>%
+  unnest() %>%
+  remove_empty("cols") %>%
+  gather(key = date, value = value, -category) %>%
+  mutate(date = ymd(date))
+
+alv_nasdaq_is
+```
+ah yeah, got it scraped and cleaned.
+
+```{r}
+alv_is_nasdaq_wide <- spread(alv_nasdaq_is, key = category, value = value) %>%
+  clean_names()
+```
+
+Repeat before, and get the gross profit myself.
+```{r}
+alv_nas_rev <- alv_is_nasdaq_wide %>%
+  select(date, matches("revenue")) %>%
+  mutate(gross_profit = total_revenue - cost_of_revenue)
+
+alv_nas_rev
+```
+
+Going to try and get operating income now.
+```{r}
+non_cogs_expenses <- unique(alv_nasdaq_is$category)[4:7] %>% make_clean_names()
+
+alv_operating_income <- alv_is_nasdaq_wide %>%
+  select(date, non_cogs_expenses) %>%
+  right_join(alv_nas_rev, by = "date") %>%
+  mutate(operating_expenses = research_and_development +
+           sales_general_and_admin +
+           non_recurring_items +
+           other_operating_items,
+         operating_income = gross_profit - operating_expenses)
+
+alv_operating_income
+```
+
+Now making an alluvial diagram like before
+```{r}
+alv_operating_alluvial <- alv_operating_income %>%
+  rename(cost_of_goods_sold = cost_of_revenue) %>%
+  select(-operating_expenses, -total_revenue, -gross_profit) %>%
+  gather(key = "operating_expenses", value = "value", -date) %>%
+  mutate(sales = "total_sales",
+         revenue = if_else(operating_expenses == "cost_of_goods_sold", "cost_of_goods_sold", "gross_profit"),
+         operating_expenses = if_else(operating_expenses == "cost_of_goods_sold", "", operating_expenses)) 
+
+alv_operating_alluvial %>%
+  ggplot(aes(y = value, axis1 = operating_expenses, axis2 = revenue, axis3 = sales)) +
+  geom_alluvium(aes(fill = operating_expenses)) +
+  geom_stratum() +
+  geom_text(stat = "stratum", label.strata = TRUE) +
+  labs(title = "Income Statement of ALV", ylab = "Dollars") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  facet_wrap(~date, ncol = 1) +
+  coord_flip() 
+
+alv_operating_alluvial %>%
+  filter(value > 0) %>%
+  ggplot(aes(y = value, axis3 = operating_expenses, axis2 = revenue, axis1 = sales)) +
+  geom_alluvium(aes(fill = operating_expenses)) +
+  geom_stratum(width = 0.6) +
+  geom_text(stat = "stratum", label.strata = TRUE) +
+  labs(title = "Income Statement of ALV", ylab = "Dollars") +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "bottom") +
+  facet_wrap(~date)
+```
+
+### Non-operating section
+From [wikipedia](https://en.wikipedia.org/wiki/Income_statement):
+
+- Other revenues or gains - revenues and gains from other than primary business activities (e.g., rent, income from patents, goodwill). It also includes unusual gains that are either unusual or infrequent, but not both (e.g., gain from sale of securities or gain from disposal of fixed assets)
+- Other expenses or losses - expenses or losses not related to primary business operations, (e.g., foreign exchange loss).
+- Finance costs - costs of borrowing from various creditors (e.g., interest expenses, bank charges).
+- Income tax expense - sum of the amount of tax payable to tax authorities in the current reporting period (current tax liabilities/ tax payable) and the amount of deferred tax liabilities (or assets).
+
+The equity earnings should be added to the above for this income statement.  I'm not sure why minority interest isn't included in any of the other calculations.  This autoliv thing is kind of jacked, there's been different numbers on different income statements, I think I'm giong to try a new one with a different stock and a different website that includes more data.
+
+So it looks like nasdaq page doesn't have the depreciation and amortization to do the EBITDA calculation.  The ebitda calculation is useful because depreciation and interst loan payments don't tell you anything about the operations (and seem to be more about cash flow), but are included in the operations calculations for some reason. I'll have to see about finding a different financial page that includes these in the future.  
+
+```{r}
+alv_is_nasdaq_wide %>%
+  mutate(earnings_before_interest_and_tax = operating_income + addl_income_expense_items + equity_earnings_loss_unconsolidated_subsidiary)
+```
+*This should have some negative numbers, I'll fix that above... fixed*

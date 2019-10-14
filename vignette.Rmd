@@ -271,6 +271,14 @@ get_fin("ALV", "BS")
 ```{r}
 get_fin(stock, "BS")
 
-test <- map(c("IS", "BS", "CF"), ~get_fin(stock = "ALV", sheet = .x))
+fin_types <- c("IS", "BS", "CF")
+
+all_annual <- map(fin_types, ~get_fin(stock = "ALV", sheet = .x))
+
+all_fins <- tibble(type = fin_types,
+                   annual = all_annual,
+                   quarter = NA_real_)
+
+all_fins
 ```
 

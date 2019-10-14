@@ -1,0 +1,224 @@
+---
+title: "Netflix Analysis: Income Statement"
+author: "jotunnch"
+date: "August 29, 2019"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(janitor)
+library(lubridate)
+source("functions.R")
+library(RColorBrewer)
+```
+
+Scrape WSJ
+```{r}
+df <- "https://quotes.wsj.com/NFLX/financials/annual/income-statement" %>%
+  read_html() %>%
+  html_nodes("table") %>%
+  .[[2]] %>%
+  html_table(fill = TRUE)
+  
+df <- df %>%
+  na_if("") %>%
+  na_if("-") %>%
+  remove_empty(c("rows", "cols")) %>%
+  rename("category" = 1) %>%
+  filter(!str_detect(category, "Growth$"),
+         !str_detect(category, "Margin$")) %>%
+  mutate_at(.vars = 2:6, str_replace, "\\(", "-") %>%
+  mutate_at(.vars = 2:6, str_replace, "\\)", "") %>%
+  mutate_at(.vars = 2:6, parse_number) %>%
+  distinct() %>%
+  gather(key = "year", value = "amount", -category) %>%
+  replace_na(list(amount = 0)) %>%
+  spread(category, amount) %>%
+  mutate(year = ymd(paste0(year, "12", "31"))) %>%
+  clean_names()
+```
+
+Trying out above as functions
+```{r}
+nflx_is <- get_wsj_fin(stock = "NFLX", sheet = "IS")
+```
+
+Grab only income statement base values, not the calculations (I'll do those myself)
+```{r}
+df %>%
+  select(-cost_of_goods_sold_cogs_incl_d_a, -gross_income, -sg_a_expense, -ebit, -interest_expense, -income_tax, -net_income, -consolidated_net_income, -net_income_after_extraordinaries, -net_income_available_to_common, -eps_basic, -eps_diluted, -ebitda, -pretax_income)
+```
+
+try above with a function
+```{r}
+nflx_is <- nflx_is %>%
+  is_get_basics()
+
+nflx_is
+```
+
+Calculate gross income
+```{r}
+nflx_is <- nflx_is %>%
+  mutate(gross_income = sales_revenue - cogs_excluding_d_a - depreciation - depreciation_amortization_expense)
+
+nflx_is
+df
+```
+Slight differences are due to rounding errors.
+
+Calculate earnings before income tax
+```{r}
+nflx_is <- nflx_is %>%
+  mutate(ebit = gross_income - research_development - other_sg_a)
+
+df
+nflx_is
+```
+
+Now figure out net income.
+```{r}
+nflx_is <- nflx_is %>%
+  mutate(pretax_income = ebit + non_operating_income_expense + non_operating_interest_income - gross_interest_expense,
+         net_income = pretax_income - income_tax_current_domestic - income_tax_current_foreign - income_tax_deferred_domestic - income_tax_deferred_foreign)
+
+nflx_is
+df
+```
+
+figure out earnings per share.
+```{r}
+nflx_is %>%
+  mutate(eps_basic = net_income / basic_shares_outstanding,
+         eps_diluted = net_income / diluted_shares_outstanding,
+         non_basic_shares = diluted_shares_outstanding - basic_shares_outstanding)
+
+df
+```
+looks like they got their eps_basic wrong and used diluted?
+
+now figure out ebitda
+```{r}
+nflx_is %>%
+  mutate(ebitda = ebit + depreciation_amortization_expense,
+         ebitda2 = sales_revenue - cogs_excluding_d_a - research_development - other_sg_a)
+
+df
+```
+
+
+## Viz
+### Sales and expenses Over Time
+```{r}
+nflx_is %>%
+  ggplot(aes(x = year, y = sales_revenue)) +
+  geom_line()
+
+nflx_is %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year) %>%
+  ggplot(aes(x = year, y = value, col = expense)) +
+  geom_line()
+
+# This is pretty, shows ebit nicely
+nflx_is %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year) %>%
+  ggplot(aes(x = year, y = value, fill = expense)) +
+  geom_area(position = "stack") +
+  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL)) +
+  theme(legend.position = "bottom")
+
+# Same as above, but for ebitda
+nflx_is %>%
+  select(year, cogs_excluding_d_a, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year) %>%
+  ggplot(aes(x = year, y = value, fill = expense)) +
+  geom_area(position = "stack") +
+  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL)) +
+  theme(legend.position = "bottom")
+
+nflx_is %>%
+  select(year, sales_revenue, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year) %>%
+  mutate(category = if_else(expense == "sales_revenue", "sales_revenue", "expense")) %>%
+  ggplot(aes(x = year, y = value, col = expense)) +
+  geom_line() +
+  facet_wrap(~category, nrow = 1) +
+  theme(legend.position = "bottom")
+
+nflx_is %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a, non_operating_income_expense, non_operating_interest_income, gross_interest_expense, starts_with("income_tax"), -income_tax_credits) %>%
+  gather(key = expense, value = value, -year) %>%
+  ggplot(aes(x = year, y = value, fill = expense)) +
+  geom_area(position = "stack") +
+  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL)) +
+  theme(legend.position = "bottom")
+```
+Looks like netflix might be putting a lot more effort into making their own shows.
+
+I like the stacked line chart, but it's not really purty. Some of the other forms of income besides sales should be stacked on it, instead of being negative.  I'll make two datasets to deal with this, one for expenses, one for income.
+
+- Income
+  - Sales/Revenue
+  - non operating income/expense (if pos)
+  - non-operating interest income
+  - income tax (if negative)
+- Expenses
+  - Cost of goods
+  - depreciation and amortization
+  - research and development
+  - other sales, gen, administration
+  - non operating income/expense (if neg)
+  - interest expense
+  - income taxes (if positive)
+
+```{r}
+income_from_tax <- function(x) {
+  if_else(x < 0, abs(x), 0)
+}
+
+expense_from_tax <- function(x) {
+  if_else(x > 0, x, 0)
+}
+
+# get income and make tidy
+nflx_income <- nflx_is %>%
+  select(year, sales_revenue, non_operating_income_expense, non_operating_interest_income, starts_with("income_tax"), -income_tax_credits) %>%
+  mutate(non_operating_income_expense = if_else(non_operating_income_expense > 0, non_operating_income_expense, 0)) %>%
+  mutate_at(vars(matches("income_tax")), income_from_tax) %>%
+  mutate_if(is.numeric, na_if, 0) %>%
+  remove_empty("cols") %>%
+  mutate_if(is.numeric, replace_na, 0) %>%
+  gather(key = category, value = value, -year)
+
+# get expenses and make tidy
+nflx_exp <- nflx_is %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a, non_operating_income_expense, gross_interest_expense, starts_with("income_tax"), -income_tax_credits) %>%
+  mutate(non_operating_income_expense = if_else(non_operating_income_expense < 0, abs(non_operating_income_expense), 0)) %>%
+  mutate_at(vars(matches("income_tax")), expense_from_tax) %>%
+  mutate_if(is.numeric, na_if, 0) %>%
+  remove_empty("cols") %>%
+  mutate_if(is.numeric, replace_na, 0) %>%
+  mutate_if(is.numeric, ~. * -1) %>%
+  gather(key = category, value = value, -year)
+  
+```
+Will layer income on top of each other using geom_area
+
+
+Not sure if can do that, looks like I'll need to do two separate images and layer them?
+```{r}
+# this doesn't work
+ggplot() +
+  geom_area(data = nflx_income, aes(x = year, y = value, fill = category)) +
+  scale_fill_brewer(palette = "Greens") +
+  geom_area(data = nflx_exp, aes(x = year, y = value, fill = category))
+
+# make custom palette
+nflx_income %>%
+  bind_rows(income = nflx_income, expense = nflx_exp, .id = "type")
+```
+
