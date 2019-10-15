@@ -126,10 +126,11 @@ nflx_is %>%
 nflx_is %>%
   select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
   gather(key = expense, value = value, -year) %>%
-  ggplot(aes(x = year, y = value, fill = expense)) +
+  ggplot(aes(x = year, y = value, fill = fct_reorder(expense, value))) +
   geom_area(position = "stack") +
-  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL)) +
-  theme(legend.position = "bottom")
+  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL), col = "green") +
+  theme(legend.position = "bottom", panel.background = element_rect(fill = "grey20"), plot.background = element_rect(fill = "grey20")) +
+  scale_fill_brewer(palette = "Reds")
 
 # Same as above, but for ebitda
 nflx_is %>%
@@ -155,9 +156,43 @@ nflx_is %>%
   ggplot(aes(x = year, y = value, fill = expense)) +
   geom_area(position = "stack") +
   geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL)) +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") +
+  
 ```
 Looks like netflix might be putting a lot more effort into making their own shows.
+
+```{r}
+expense_legend <- nflx_is %>%
+  filter(year == max(year)) %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year) %>%
+  arrange(-value) %>%
+  mutate(top_value = cumsum(value),
+         middle_value = top_value - value/2,
+         expense = fct_recode(expense, 
+                              "research & development" = "research_development",
+                              "cost of goods sold" = "cogs_excluding_d_a",
+                              "sales, general & \nadministration" = "other_sg_a",
+                              "depreciation & \namortization" = "depreciation_amortization_expense"))
+  
+
+tidy_nflx_exp_short <- nflx_is %>%
+  select(year, cogs_excluding_d_a, depreciation_amortization_expense, research_development, other_sg_a) %>%
+  gather(key = expense, value = value, -year)
+
+ggplot() +
+  geom_area(data = tidy_nflx_exp_short, aes(x = year, y = value, fill = fct_reorder(expense, value)), position = "stack", alpha = 0.7, col = "black") +
+  geom_line(data = nflx_is, aes(x = year, y = sales_revenue, fill = NULL), col = "#a1e79f", size = 1.5, alpha = 0.7) +
+  annotate("text", x = max(nflx_is$year) + 10, y = max(nflx_is$sales_revenue), label = "sales revenue", col = "#a1e79f", hjust = 0, vjust = 0.5) +
+  theme(legend.position = "none", panel.background = element_rect(fill = "#3d577b"), plot.background = element_rect(fill = "#3d577b"), panel.grid = element_blank(), text = element_text(color = "white"), panel.grid.major.y = element_line(color = "grey40"), axis.text = element_text(color = "grey80"), axis.ticks = element_blank()) +
+  geom_text(data = expense_legend, aes(x = year + 10, y = middle_value, label = expense, vjust = 0.5, hjust = 0)) +
+  expand_limits(x = as.Date("2019-12-31")) +
+  scale_fill_brewer(palette = "Reds") +
+  labs(title = "Netflix earnings before interest and taxes", subtitle = "From annual income statements", y = "usd millions", caption = "data: wsj")
+
+
+
+```
 
 
 ## Scraping Below
